@@ -1,24 +1,50 @@
-if model.SolCount > 0:
-    r_opt = r.X
-    R_opt = R.X
-    h_opt = h.X
-    obj_opt = Objectif.X
-    S_opt = Surface.X
+from functools import partial
+import gurobipy as gp
+from gurobipy import GRB
+import math
 
-    # Recalculs pour vérification numérique (avec les valeurs optimales)
-    S_check = math.pi*r_opt**2 + math.pi*(R_opt + r_opt)*math.sqrt((R_opt - r_opt)**2 + h_opt**2)
-    V_check = (math.pi*h_opt/3.0)*(R_opt**2 + R_opt*r_opt + r_opt**2)
+class CallbackData:
+    def __init__(self):
+        self.last_gap_change_time = -GRB.INFINITY
+        self.last_gap = GRB.INFINITY
 
-    print("\n=== Solution optimale ===")
-    print(f"r         = {r_opt:.6f}")
-    print(f"R         = {R_opt:.6f}")
-    print(f"h         = {h_opt:.6f}")
-    print(f"Surface   = {S_opt:.6f}")
-    print(f"Objectif  = {obj_opt:.6f}  (volume)")
 
-    # Contrôles rapides (écarts numériques très petits attendus)
-    print("\n--- Vérifications ---")
-    print(f"Surface (recalcul) = {S_check:.6f}   | écart = {abs(S_opt - S_check):.3e}")
-    print(f"Volume  (recalcul) = {V_check:.6f}   | écart = {abs(obj_opt - V_check):.3e}")
-else:
-    print("Aucune solution trouvée (SolCount=0). Statut:", model.Status)
+def callback(model, where, *, cbdata):
+    if where != GRB.Callback.MIP:
+        return
+    if model.cbGet(GRB.Callback.MIP_SOLCNT) == 0:
+        return
+
+    # Temps courant
+    current_time = model.cbGet(GRB.Callback.RUNTIME)
+    # Reconstruire le gap courant: |bestobj - bestbnd| / (|bestobj| + eps)
+    bestobj = model.cbGet(GRB.Callback.MIP_OBJBST)  # meilleure solution entière
+    bestbnd = model.cbGet(GRB.Callback.MIP_OBJBND)  # meilleure borne
+
+    if math.isinf(bestobj) or math.isinf(bestbnd):
+        current_gap = GRB.INFINITY
+    else:
+        denom = abs(bestobj) + 1e-10
+        current_gap = abs(bestobj - bestbnd) / denom
+
+    # Logique d'arrêt si le gap n'a pas baissé d'au moins epsilon
+    if (current_time - cbdata.last_gap_change_time > max_time_between_gap_updates and
+            abs(cbdata.last_gap - current_gap) < epsilon_to_compare_gap):
+        print(f"Terminating optimization: gap has not changed significantly "
+              f"in the last {max_time_between_gap_updates} seconds. "
+              f"(gap ~ {current_gap:.6g})")
+        model.terminate()
+    elif abs(cbdata.last_gap - current_gap) >= epsilon_to_compare_gap:
+        cbdata.last_gap = current_gap
+        cbdata.last_gap_change_time = current_time
+
+with gp.read("data/data/mkp.mps") as model:
+    # Global variables used in the callback function
+    max_time_between_gap_updates = 15
+    epsilon_to_compare_gap = 1e-4
+
+    # Initialize data passed to the callback function
+    callback_data = CallbackData()
+    callback_func = partial(callback, cbdata=callback_data)
+
+    model.optimize(callback_func)

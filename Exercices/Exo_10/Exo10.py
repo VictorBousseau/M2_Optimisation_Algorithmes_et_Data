@@ -2,6 +2,7 @@ import math
 import gurobipy as gp
 from gurobipy import GRB, nlfunc as nl
 
+
 # Parameters
 L1, L2 = 1.0, 0.8             # Lengths of the links
 x_star, y_star = 1.20, 0.60   # Point to reach
@@ -11,43 +12,42 @@ xo, yo, r = 0.50, 0.00, 0.20  # Disk to avoid
 theta1_min, theta1_max = -math.pi, math.pi
 theta2_min, theta2_max = -0.75*math.pi, 0.75*math.pi
 
+
 # Build model
 m = gp.Model("robot_arm_nlfunc")
-m.Params.NonConvex = 2  # sin/cos -> nonconvexe
 
 # Decision variables (angles)
 theta1 = m.addVar(lb=theta1_min, ub=theta1_max, name="theta1")
 theta2 = m.addVar(lb=theta2_min, ub=theta2_max, name="theta2")
 
-# Cartesian end-effector and midpoint of link 1
-x  = m.addVar(name="x")
-y  = m.addVar(name="y")
-xm = m.addVar(name="xm")  # midpoint x of first link
-ym = m.addVar(name="ym")  # midpoint y of first link
+# Kinematics variables (end-effector and mid-link point)
+x  = m.addVar(lb=-GRB.INFINITY, name="x")
+y  = m.addVar(lb=-GRB.INFINITY, name="y")
+xm = m.addVar(lb=-GRB.INFINITY, name="xm")
+ym = m.addVar(lb=-GRB.INFINITY, name="ym")
 
-# Forward kinematics: end-effector
-m.addConstr(x == L1*nl.cos(theta1) + L2*nl.cos(theta1 + theta2), name="fk_x")
-m.addConstr(y == L1*nl.sin(theta1) + L2*nl.sin(theta1 + theta2), name="fk_y")
+# Nonlinear trig expressions via nlfunc
+# These are NLExpr objects that you can use directly in constraints/objective
+c1  = nl.cos(theta1)
+s1  = nl.sin(theta1)
+th12 = theta1 + theta2
+c12 = nl.cos(th12)
+s12 = nl.sin(th12)
 
-# Midpoint of the first link (collision proxy)
-m.addConstr(xm == 0.5*L1*nl.cos(theta1), name="mid_x")
-m.addConstr(ym == 0.5*L1*nl.sin(theta1), name="mid_y")
+# Forward kinematics using nonlinear expressions
+m.addConstr(x  == L1 * c1  + L2 * c12, name="x_def")
+m.addConstr(y  == L1 * s1  + L2 * s12, name="y_def")
+m.addConstr(xm == 0.5 * L1 * c1,       name="xm_def")
+m.addConstr(ym == 0.5 * L1 * s1,       name="ym_def")
 
-# Obstacle avoidance: midpoint outside the disk (xm,ym) not in circle
-# Distance^2 du milieu du 1er bras au centre de l’obstacle
-dist2 = m.addVar(name="dist2")
-m.addConstr(dist2 == nl.sqrt(xm - xo) + nl.sqrt(ym - yo), name="def_dist2")
-m.addConstr(dist2 >= r**2, name="avoid_disk")
+# Obstacle avoidance: keep mid-link outside circle
+m.addQConstr((xm - xo)**2 + (ym - yo)**2 >= r**2, name="mid_outside")
 
-# Objective: minimize squared distance to target (x*, y*)
-m.setObjective(nl.sqrt(x - x_star) + nl.sqrt(y - y_star), GRB.MINIMIZE)
-
-# (Optionnel) point de départ pour accélérer
-theta1.Start = 0.0
-theta2.Start = 0.0
+# Objective: reach target
+obj = (x - x_star)**2 + (y - y_star)**2
+m.setObjective(obj, GRB.MINIMIZE)
 
 m.optimize()
-
 
 sol = None
 if m.Status == GRB.OPTIMAL:

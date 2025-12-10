@@ -1,0 +1,22 @@
+# Python / Environments
+**/venv/
+.venv/
+venv/
+env/
+.env
+__pycache__/
+*.py[cod]
+
+# Large Files & Data
+*.mps
+*.out
+*.zip
+*.tar.gz
+
+# System
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
